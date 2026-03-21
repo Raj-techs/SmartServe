@@ -14,28 +14,39 @@ import adminRoutes from './routes/admin.js';
 
 dotenv.config();
 
+const ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://smart-serve-two.vercel.app',
+    process.env.FRONTEND_URL,
+].filter(Boolean);
+
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, curl, Postman)
+        if (!origin) return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        callback(new Error(`CORS blocked: ${origin}`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
 const app = express();
 const httpServer = createServer(app);
+
+// Must be BEFORE all routes
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // handle preflight for all routes
+app.use(express.json());
 export const io = new Server(httpServer, {
     cors: {
-        origin: [
-            'http://localhost:5173',
-            process.env.FRONTEND_URL,
-        ].filter(Boolean),
+        origin: ALLOWED_ORIGINS,
         methods: ['GET', 'POST', 'PUT', 'DELETE'],
         credentials: true,
     },
 });
-
-app.use(cors({
-    origin: [
-        'http://localhost:5173',
-        process.env.FRONTEND_URL,
-    ].filter(Boolean),
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-}));
-app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/product', productRoutes);

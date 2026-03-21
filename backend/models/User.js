@@ -1,0 +1,15 @@
+import mongoose from 'mongoose';
+
+const userSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    role: {
+        type: String,
+        enum: ['superadmin', 'owner', 'kitchen', 'waiter'],
+        default: 'owner'
+    },
+    shopId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shop', default: null },
+}, { timestamps: true });
+
+export default mongoose.model('User', userSchema);

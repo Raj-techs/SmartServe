@@ -11,7 +11,7 @@ import {
     getShopOrders, getAllShopOrders, generateToken, getTableQR, updateTableStatus, getActiveToken
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { getSocket } from '../hooks/useSocket';
+import { getSocket, whenConnected } from '../hooks/useSocket';
 import toast from 'react-hot-toast';
 
 export default function ShopDashboard() {
@@ -53,7 +53,9 @@ export default function ShopDashboard() {
     useEffect(() => {
         if (!shop) return;
         const socket = getSocket();
-        socket.emit('join_shop', shop._id);
+        // Join shop room — use whenConnected to be safe on production
+        whenConnected((s) => s.emit('join_shop', shop._id));
+
         socket.on('seat_request', ({ tableNumber, username, socketId }) => {
             setShowNotifDot(true);
             setNotifications(n => [`🪑 ${username} wants to sit at Table ${tableNumber}`, ...n.slice(0, 9)]);

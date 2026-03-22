@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChefHat, ArrowRight, User, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { validateToken } from '../services/api';
-import { getSocket } from '../hooks/useSocket';
+import { getSocket, whenConnected } from '../hooks/useSocket';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -20,31 +20,46 @@ export default function TokenEntryPage() {
     const [mySocketId, setMySocketId] = useState('');
 
     useEffect(() => {
-        const socket = getSocket();
-        setMySocketId(socket.id);
-        socket.emit('join_table', { shopId, tableNumber });
+        // Wait until socket is actually connected before joining room
+        whenConnected((socket) => {
+            setMySocketId(socket.id);
+            socket.emit('join_table', { shopId, tableNumber });
+        });
 
-        // Owner accepted → move to PIN step
-        socket.on('seat_accepted', ({ shopId: sid, tableNumber: tn }) => {
+        const socket = getSocket();
+
+        const handleAccepted = ({ shopId: sid, tableNumber: tn }) => {
             toast.success('✅ Owner accepted! Now enter your PIN.');
             setStep(3);
-        });
-        // Owner rejected
-        socket.on('seat_rejected', () => {
+        };
+        const handleRejected = () => {
             setRejected(true);
-            setStep(2); // stay on waiting but show rejected state
+            setStep(2);
             toast.error('Request rejected. Please ask the owner.');
-        });
+        };
 
-        return () => { socket.off('seat_accepted'); socket.off('seat_rejected'); };
+        socket.on('seat_accepted', handleAccepted);
+        socket.on('seat_rejected', handleRejected);
+
+        return () => {
+            socket.off('seat_accepted', handleAccepted);
+            socket.off('seat_rejected', handleRejected);
+        };
     }, [shopId, tableNumber]);
 
     // Step 1: Customer enters name → emit seat_request to owner
     const handleNameSubmit = () => {
         if (!username.trim()) return toast.error('Please enter your name');
-        const socket = getSocket();
-        socket.emit('seat_request', { shopId, tableNumber, username, socketId: socket.id });
-        setStep(2); // waiting for owner approval
+        // Use whenConnected to guarantee socket.id is available
+        whenConnected((socket) => {
+            socket.emit('join_table', { shopId, tableNumber }); // re-join to be safe
+            socket.emit('seat_request', {
+                shopId, tableNumber, username,
+                socketId: socket.id, // guaranteed to be set now
+            });
+            setMySocketId(socket.id);
+        });
+        setStep(2);
     };
 
     // Step 3: Customer enters PIN after approval
@@ -60,20 +75,20 @@ export default function TokenEntryPage() {
         } finally { setLoading(false); }
     };
 
-    // Step 4: Final entry — also add guest seats
+    // Step 4: Final entry — fill extra seats as Guest 2, Guest 3...
     const handleEnter = async () => {
         setLoading(true);
         try {
-            // Validate token once more with username (already done in step 3)
-            // Now add guest placeholder members for extra seats (people - 1)
-            // We do this by calling validate for each "Guest N" silently
-            const guestPromises = [];
-            for (let i = 2; i <= people; i++) {
-                guestPromises.push(
-                    validateToken(pin, shopId, `Guest ${i}`).catch(() => {})
-                );
+            // Add guest placeholder members for extra seats (silent — don't block on failure)
+            if (people > 1) {
+                const guestPromises = [];
+                for (let i = 2; i <= people; i++) {
+                    guestPromises.push(
+                        validateToken(pin, shopId, `Guest ${i}`).catch(() => {})
+                    );
+                }
+                await Promise.allSettled(guestPromises); // allSettled — never throws
             }
-            await Promise.all(guestPromises);
 
             localStorage.setItem('customer_session', JSON.stringify({
                 shopId, tableNumber, pin,
@@ -81,12 +96,18 @@ export default function TokenEntryPage() {
                 username, people,
                 startedAt: Date.now(),
             }));
-            const socket = getSocket();
-            socket.emit('customer_seated', { shopId, tableNumber, username });
+
+            whenConnected((socket) => {
+                socket.emit('customer_seated', { shopId, tableNumber, username });
+            });
+
             toast.success(`Welcome, ${username}! 🎉`);
             navigate(`/menu/${shopId}/${tableNumber}`);
-        } catch { toast.error('Could not join. Try again.'); }
-        finally { setLoading(false); }
+        } catch (err) {
+            toast.error('Could not join. Try again.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (

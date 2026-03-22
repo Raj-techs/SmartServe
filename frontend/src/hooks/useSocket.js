@@ -6,11 +6,24 @@ let socketInstance = null;
 export const getSocket = () => {
     if (!socketInstance) {
         socketInstance = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
-            transports: ['websocket'],
+            transports: ['websocket', 'polling'], // polling as fallback for production
             autoConnect: true,
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
         });
     }
     return socketInstance;
+};
+
+// Wait until socket is connected, then run callback
+export const whenConnected = (callback) => {
+    const socket = getSocket();
+    if (socket.connected) {
+        callback(socket);
+    } else {
+        socket.once('connect', () => callback(socket));
+    }
 };
 
 // Hook: joins a room and listens for events
@@ -21,10 +34,8 @@ export const useSocket = (room, eventHandlers = {}) => {
 
     useEffect(() => {
         if (room) socket.emit('join_shop', room);
-
         const entries = Object.entries(handlersRef.current);
         entries.forEach(([event, handler]) => socket.on(event, handler));
-
         return () => {
             entries.forEach(([event, handler]) => socket.off(event, handler));
         };

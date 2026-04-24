@@ -5,7 +5,67 @@ import Shop from '../models/Shop.js';
 
 const router = express.Router();
 
-// Owner generates token for a table
+// Customer joins a table directly (no PIN entry) — gets guestCode back
+router.post('/join', async (req, res) => {
+    try {
+        const { shopId, tableNumber, username, people } = req.body;
+        if (!shopId || !tableNumber || !username) return res.status(400).json({ error: 'Missing fields' });
+
+        // Find active token for this table (owner must have activated it first)
+        let token = await SessionToken.findOne({ shopId, tableNumber, isActive: true });
+
+        // If no active token, auto-create one (table auto-activate)
+        if (!token) {
+            token = await createToken(shopId, tableNumber);
+            await Shop.updateOne(
+                { _id: shopId, 'tables.tableNumber': tableNumber },
+                { $set: { 'tables.$.status': 'active' } }
+            );
+        }
+
+        // Add member if not already joined
+        const alreadyJoined = token.members.some(m => m.username === username);
+        if (!alreadyJoined) {
+            token.members.push({ username });
+            // Add guest placeholders for extra people
+            if (people && people > 1) {
+                for (let i = 2; i <= people; i++) {
+                    const guestName = `Guest_${username}_${i}`;
+                    if (!token.members.some(m => m.username === guestName)) {
+                        token.members.push({ username: guestName });
+                    }
+                }
+            }
+            await token.save();
+        }
+
+        // Return token info — pin acts as guestCode
+        res.json({
+            success: true,
+            tokenId: token._id,
+            guestCode: token.pin, // 6-digit code for rejoin
+            tableNumber: token.tableNumber,
+            shopId: token.shopId,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// Rejoin via guest code (6-digit pin)
+router.post('/rejoin', async (req, res) => {
+    try {
+        const { shopId, tableNumber, guestCode, username } = req.body;
+        if (!shopId || !tableNumber || !guestCode) return res.status(400).json({ error: 'Missing fields' });
+        const token = await SessionToken.findOne({ shopId, tableNumber, pin: guestCode, isActive: true });
+        if (!token) return res.status(404).json({ error: 'Invalid or expired code. Ask staff for help.' });
+        const alreadyJoined = token.members.some(m => m.username === username);
+        if (username && !alreadyJoined) { token.members.push({ username }); await token.save(); }
+        res.json({ success: true, tokenId: token._id, guestCode: token.pin, tableNumber: token.tableNumber, shopId: token.shopId });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.post('/generate', async (req, res) => {
     try {
         const { shopId, tableNumber } = req.body;
@@ -86,6 +146,19 @@ router.put('/close/:tokenId', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// Remove a single member from a token (customer leaves)
+router.put('/leave/:tokenId/:username', async (req, res) => {
+    try {
+        const token = await SessionToken.findById(req.params.tokenId);
+        if (!token) return res.status(404).json({ error: 'Token not found' });
+        token.members = token.members.filter(m => m.username !== req.params.username);
+        // If no members left, close token
+        if (token.members.length === 0) token.isActive = false;
+        await token.save();
+        res.json({ success: true, membersLeft: token.members.length });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 export default router;

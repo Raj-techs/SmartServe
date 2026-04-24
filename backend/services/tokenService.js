@@ -8,7 +8,7 @@ export const generatePIN = () => {
 // Create a new token for a table
 export const createToken = async (shopId, tableNumber) => {
     const pin = generatePIN();
-    const expiresAt = new Date(Date.now() + 35 * 60 * 1000); // 35 minutes
+    const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4 hours
 
     const token = new SessionToken({
         shopId,

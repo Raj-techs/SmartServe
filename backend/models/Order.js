@@ -7,8 +7,8 @@ const orderItemSchema = new mongoose.Schema({
     orderType: { type: String, enum: ['dine-in', 'parcel'], default: 'dine-in' },
     status: {
         type: String,
-        enum: ['received', 'preparing', 'ready', 'served'],
-        default: 'received'
+        enum: ['pending_waiter', 'received', 'preparing', 'ready', 'served', 'cancelled'],
+        default: 'pending_waiter'
     }
 });
 

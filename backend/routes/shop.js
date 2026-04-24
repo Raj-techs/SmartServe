@@ -83,4 +83,73 @@ router.get('/:shopId/qr/:tableNumber', async (req, res) => {
     }
 });
 
+// ── Offers CRUD ────────────────────────────────────────────
+// Get all offers for a shop (public)
+router.get('/:shopId/offers', async (req, res) => {
+    try {
+        const shop = await Shop.findById(req.params.shopId);
+        if (!shop) return res.status(404).json({ error: 'Shop not found' });
+        const now = new Date();
+        const active = (shop.offers || []).filter(o =>
+            o.status === 'active' && (!o.expiryDate || new Date(o.expiryDate) > now)
+        );
+        res.json(active);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get ALL offers for owner management
+router.get('/:shopId/offers/all', authMiddleware, async (req, res) => {
+    try {
+        const shop = await Shop.findById(req.params.shopId);
+        if (!shop) return res.status(404).json({ error: 'Shop not found' });
+        res.json(shop.offers || []);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add offer
+router.post('/:shopId/offers', authMiddleware, async (req, res) => {
+    try {
+        const shop = await Shop.findById(req.params.shopId);
+        if (!shop) return res.status(404).json({ error: 'Shop not found' });
+        const { title, description, image, specialPrice, originalPrice, discountPercent, status, expiryDate } = req.body;
+        const discount = discountPercent || (originalPrice ? Math.round(((originalPrice - specialPrice) / originalPrice) * 100) : 0);
+        shop.offers.push({ title, description, image, specialPrice, originalPrice, discountPercent: discount, status: status || 'active', expiryDate: expiryDate || null });
+        await shop.save();
+        res.status(201).json(shop.offers[shop.offers.length - 1]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update offer
+router.put('/:shopId/offers/:offerId', authMiddleware, async (req, res) => {
+    try {
+        const shop = await Shop.findById(req.params.shopId);
+        if (!shop) return res.status(404).json({ error: 'Shop not found' });
+        const offer = shop.offers.id(req.params.offerId);
+        if (!offer) return res.status(404).json({ error: 'Offer not found' });
+        Object.assign(offer, req.body);
+        await shop.save();
+        res.json(offer);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete offer
+router.delete('/:shopId/offers/:offerId', authMiddleware, async (req, res) => {
+    try {
+        const shop = await Shop.findById(req.params.shopId);
+        if (!shop) return res.status(404).json({ error: 'Shop not found' });
+        shop.offers = shop.offers.filter(o => o._id.toString() !== req.params.offerId);
+        await shop.save();
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update UPI ID
+router.put('/:shopId/upi', authMiddleware, async (req, res) => {
+    try {
+        const { upiId } = req.body;
+        const shop = await Shop.findByIdAndUpdate(req.params.shopId, { upiId }, { new: true });
+        res.json(shop);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 export default router;

@@ -12,6 +12,7 @@ import MenuPage from './pages/MenuPage';
 import OrderStatusPage from './pages/OrderStatusPage';
 import KitchenPanel from './pages/KitchenPanel';
 import WaiterPanel from './pages/WaiterPanel';
+import SessionEndedPage from './pages/SessionEndedPage';
 
 function PrivateRoute({ children, role }) {
     const { user, loading } = useAuth();
@@ -28,7 +29,7 @@ function PrivateRoute({ children, role }) {
 function AppRoutes() {
     return (
         <Routes>
-            {/* Public */}
+            {/* Public — Owner/Staff only */}
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
@@ -37,6 +38,9 @@ function AppRoutes() {
             <Route path="/scan/:shopId/:tableNumber" element={<TokenEntryPage />} />
             <Route path="/menu/:shopId/:tableNumber" element={<MenuPage />} />
             <Route path="/order-status/:shopId/:tableNumber" element={<OrderStatusPage />} />
+
+            {/* Safe payment-complete dead-end for customers — NO landing page link */}
+            <Route path="/session-ended" element={<SessionEndedPage />} />
 
             {/* Owner */}
             <Route path="/dashboard" element={<PrivateRoute><ShopDashboard /></PrivateRoute>} />
@@ -50,8 +54,8 @@ function AppRoutes() {
             {/* Super Admin */}
             <Route path="/admin" element={<PrivateRoute role="superadmin"><AdminDashboard /></PrivateRoute>} />
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Fallback — unknown routes go to login, NOT landing page */}
+            <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
     );
 }

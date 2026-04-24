@@ -36,7 +36,6 @@ const app = express();
 const httpServer = createServer(app);
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
@@ -84,24 +83,54 @@ io.on('connection', (socket) => {
     });
 
     socket.on('order_placed', ({ shopId, tableNumber, order }) => {
-        io.to(`shop_${shopId}`).emit('new_order', { tableNumber, order });
-        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'placed' });
+        // Notify waiter for verification (not kitchen yet)
+        io.to(`shop_${shopId}`).emit('order_pending_waiter', { tableNumber, order });
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'pending_waiter' });
     });
 
-    socket.on('order_status_update', ({ shopId, tableNumber, orderId, status }) => {
+    // Waiter accepted → notify customer, notify kitchen
+    socket.on('order_accepted_by_waiter', ({ shopId, tableNumber, orderId, username }) => {
+        io.to(`shop_${shopId}`).emit('new_order', { tableNumber });
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'placed', username: username || null });
+        io.to(`shop_${shopId}`).emit('order_updated', { orderId });
+    });
+
+    // Waiter rejected → notify customer
+    socket.on('order_rejected_by_waiter', ({ shopId, tableNumber, orderId, username }) => {
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'rejected', username: username || null });
+        io.to(`shop_${shopId}`).emit('order_updated', { orderId });
+    });
+
+    socket.on('order_status_update', ({ shopId, tableNumber, orderId, status, username }) => {
         io.to(`table_${shopId}_${tableNumber}`).emit('order_updated', { orderId, status });
         io.to(`shop_${shopId}`).emit('order_updated', { orderId, status });
         const phase = status === 'served' ? 'served' : status === 'ready' ? 'ready' : 'preparing';
-        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase });
+        // Pass username so FloatingStatusBar only activates for the correct user
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase, username: username || null });
     });
 
     socket.on('order_received_confirm', ({ shopId, tableNumber }) => {
         io.to(`shop_${shopId}`).emit('order_received_confirm', { tableNumber });
     });
 
-    socket.on('payment_done', ({ shopId, tableNumber }) => {
+    // ── Customer requests cash collection ──────────────────
+    socket.on('cash_payment_request', ({ shopId, tableNumber, username, amount, orderId, customerSocketId }) => {
+        io.to(`shop_${shopId}`).emit('cash_payment_request', {
+            tableNumber, username, amount, orderId,
+            customerSocketId: customerSocketId || socket.id,
+        });
+    });
+
+    // ── Waiter collected cash → notify customer ────────────
+    socket.on('cash_collected', ({ customerSocketId, shopId, tableNumber, orderId, username }) => {
+        io.to(customerSocketId).emit('cash_collected', { orderId });
         io.to(`shop_${shopId}`).emit('payment_done', { tableNumber });
-        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'paid' });
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'paid', username: username || null });
+    });
+
+    socket.on('payment_done', ({ shopId, tableNumber, username }) => {
+        io.to(`shop_${shopId}`).emit('payment_done', { tableNumber });
+        io.to(`table_${shopId}_${tableNumber}`).emit('order_status_changed', { phase: 'paid', username: username || null });
     });
 
     socket.on('disconnect', () => {});

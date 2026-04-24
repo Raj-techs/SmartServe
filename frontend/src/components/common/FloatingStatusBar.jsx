@@ -18,18 +18,34 @@ export default function FloatingStatusBar() {
     const [phase, setPhase] = useState(null); // null = no orders yet, don't show
     const [visible, setVisible] = useState(true);
 
+    // Read session username so we only react to THIS user's events
+    const myUsername = (() => {
+        try { return JSON.parse(localStorage.getItem('customer_session') || '{}').username; }
+        catch { return null; }
+    })();
+
     useEffect(() => {
         const socket = getSocket();
         socket.emit('join_table', { shopId, tableNumber });
-        socket.on('order_status_changed', ({ phase: p }) => { setPhase(p); setVisible(true); });
-        socket.on('order_updated',        () => setVisible(true));
-        socket.on('payment_done',         () => { setPhase('paid'); setVisible(true); });
+
+        // Only update phase if the event carries our username OR has no username filter
+        socket.on('order_status_changed', ({ phase: p, username }) => {
+            if (!username || username === myUsername) {
+                setPhase(p); setVisible(true);
+            }
+        });
+        socket.on('order_updated', () => setVisible(true));
+        socket.on('payment_done', ({ username }) => {
+            if (!username || username === myUsername) {
+                setPhase('paid'); setVisible(true);
+            }
+        });
         return () => {
             socket.off('order_status_changed');
             socket.off('order_updated');
             socket.off('payment_done');
         };
-    }, [shopId, tableNumber]);
+    }, [shopId, tableNumber, myUsername]);
 
     if (!phase) return null;
     const cfg = PHASE_CONFIG[phase] || PHASE_CONFIG.placed;

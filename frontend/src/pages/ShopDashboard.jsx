@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
     LayoutGrid, ShoppingBag, QrCode, Settings, LogOut,
-    Bell, Plus, Trash2, RefreshCw, Download, Package, BarChart3, Key
+    Bell, Plus, Trash2, RefreshCw, Download, Package, BarChart3, Key, Tag, Edit2
 } from 'lucide-react';
 import {
     getMyShop, createShop, updateShopTables,
     getProducts, addProduct, deleteProduct,
-    getShopOrders, getAllShopOrders, generateToken, getTableQR, updateTableStatus, getActiveToken
+    getShopOrders, getAllShopOrders, generateToken, getTableQR, updateTableStatus, getActiveToken,
+    getAllOffers, addOffer, updateOffer, deleteOffer, updateUPI
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { getSocket, whenConnected } from '../hooks/useSocket';
@@ -26,7 +27,6 @@ export default function ShopDashboard() {
     const [notifications, setNotifications] = useState([]);
     const [showNotifDot, setShowNotifDot] = useState(false);
     const [pinModal, setPinModal] = useState(null); // { tableNumber, pin }
-    const [seatRequests, setSeatRequests] = useState([]); // [{ tableNumber, username, socketId }]
 
     const fetchData = useCallback(async () => {
         try {
@@ -56,11 +56,6 @@ export default function ShopDashboard() {
         // Join shop room — use whenConnected to be safe on production
         whenConnected((s) => s.emit('join_shop', shop._id));
 
-        socket.on('seat_request', ({ tableNumber, username, socketId }) => {
-            setShowNotifDot(true);
-            setNotifications(n => [`🪑 ${username} wants to sit at Table ${tableNumber}`, ...n.slice(0, 9)]);
-            setSeatRequests(prev => [...prev, { tableNumber, username, socketId }]);
-        });
         socket.on('customer_seated', ({ tableNumber, username }) => {
             setShowNotifDot(true);
             setNotifications(n => [`🪑 ${username} seated at Table ${tableNumber}`, ...n.slice(0, 9)]);
@@ -71,29 +66,19 @@ export default function ShopDashboard() {
             setNotifications(n => [`🛎️ New order from Table ${tableNumber}`, ...n.slice(0, 9)]);
             fetchData();
         });
+        socket.on('order_updated', () => {
+            // Re-fetch so chair steps update immediately for all panels
+            fetchData();
+        });
         socket.on('payment_done', ({ tableNumber }) => {
             setNotifications(n => [`✅ Payment done — Table ${tableNumber}`, ...n.slice(0, 9)]);
             fetchData();
         });
-        return () => { socket.off('seat_request'); socket.off('customer_seated'); socket.off('new_order'); socket.off('payment_done'); };
+        return () => { socket.off('customer_seated'); socket.off('new_order'); socket.off('order_updated'); socket.off('payment_done'); };
     }, [shop, fetchData]);
 
     const handleLogout = () => { logout(); navigate('/login'); };
 
-    const handleAcceptSeat = (req) => {
-        const socket = getSocket();
-        socket.emit('seat_accepted', { customerSocketId: req.socketId, shopId: shop._id, tableNumber: req.tableNumber });
-        setSeatRequests(prev => prev.filter(r => r.socketId !== req.socketId));
-        toast.success(`✅ Accepted ${req.username} at Table ${req.tableNumber}`);
-        fetchData();
-    };
-
-    const handleRejectSeat = (req) => {
-        const socket = getSocket();
-        socket.emit('seat_rejected', { customerSocketId: req.socketId });
-        setSeatRequests(prev => prev.filter(r => r.socketId !== req.socketId));
-        toast(`❌ Rejected ${req.username}`, { icon: '🚫' });
-    };
     const handleActivateTable = async (tableNumber) => {
         try {
             const { data } = await generateToken(shop._id, tableNumber);
@@ -134,6 +119,7 @@ export default function ShopDashboard() {
         { key: 'tables', icon: <LayoutGrid className="w-5 h-5" />, label: 'Tables' },
         { key: 'orders', icon: <ShoppingBag className="w-5 h-5" />, label: 'Orders' },
         { key: 'products', icon: <Package className="w-5 h-5" />, label: 'Products' },
+        { key: 'offers', icon: <Tag className="w-5 h-5" />, label: 'Offers' },
         { key: 'qr', icon: <QrCode className="w-5 h-5" />, label: 'QR Codes' },
         { key: 'analytics', icon: <BarChart3 className="w-5 h-5" />, label: 'Revenue' },
         { key: 'settings', icon: <Settings className="w-5 h-5" />, label: 'Settings' },
@@ -191,6 +177,7 @@ export default function ShopDashboard() {
                     {tab === 'tables' && <TablesView tables={enrichedTables} shopId={shop._id} onActivate={handleActivateTable} onStatusChange={handleTableStatus} onShowPin={setPinModal} />}
                     {tab === 'orders' && <OrdersView orders={orders} />}
                     {tab === 'products' && <ProductsView products={products} shopId={shop._id} shopCategory={shop.category} onRefresh={fetchData} />}
+                    {tab === 'offers' && <OffersView shopId={shop._id} />}
                     {tab === 'qr' && <QRView tables={shop.tables} shopId={shop._id} />}
                     {tab === 'analytics' && <AnalyticsView orders={allOrders} />}
                     {tab === 'settings' && <SettingsView shop={shop} />}
@@ -206,27 +193,6 @@ export default function ShopDashboard() {
                 </div>
             </main>
             {pinModal && <PinModal tableNumber={pinModal.tableNumber} pin={pinModal.pin} shopId={shop._id} onClose={() => setPinModal(null)} />}
-        {/* Seat Request Popups — stacked from bottom-right */}
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm">
-            {seatRequests.map((req, i) => (
-                <motion.div key={req.socketId} initial={{ x: 100, opacity: 0 }} animate={{ x: 0, opacity: 1 }}
-                    className="bg-slate-900 border border-blue-500/40 rounded-2xl p-4 shadow-2xl">
-                    <p className="text-xs text-blue-400 font-bold uppercase tracking-wider mb-1">🪑 Seat Request</p>
-                    <p className="text-white font-bold mb-0.5">{req.username}</p>
-                    <p className="text-slate-400 text-xs mb-3">wants to sit at <span className="text-white font-semibold">Table {req.tableNumber}</span></p>
-                    <div className="flex gap-2">
-                        <button onClick={() => handleAcceptSeat(req)}
-                            className="flex-1 bg-green-500 hover:bg-green-400 text-white font-bold py-2 rounded-xl text-sm transition">
-                            ✅ Accept
-                        </button>
-                        <button onClick={() => handleRejectSeat(req)}
-                            className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 font-bold py-2 rounded-xl text-sm border border-red-500/30 transition">
-                            ❌ Reject
-                        </button>
-                    </div>
-                </motion.div>
-            ))}
-        </div>
         </div>
     );
 }
@@ -284,7 +250,6 @@ function TablesView({ tables, shopId, onActivate, onStatusChange, onShowPin }) {
             <div className="grid grid-cols-2 gap-8 justify-items-center">
                 {tables.map(t => {
                     const token = tokens[t.tableNumber];
-                    const pin = token?.pin;
                     const members = token?.members || [];
                     const seats = t.seats || 4;
                     return (
@@ -297,19 +262,7 @@ function TablesView({ tables, shopId, onActivate, onStatusChange, onShowPin }) {
                                 }
                             </div>
 
-                            {/* PIN + Controls below table */}
-                            {pin && (
-                                <div className="w-full bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-2.5 flex items-center justify-between">
-                                    <div>
-                                        <p className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">PIN</p>
-                                        <p className="text-2xl font-black text-orange-400 tracking-[0.2em]">{pin}</p>
-                                    </div>
-                                    <button onClick={() => onShowPin({ tableNumber: t.tableNumber, pin })}
-                                        className="text-xs font-bold bg-orange-500 text-white px-3 py-1.5 rounded-lg hover:bg-orange-400 transition">
-                                        Show
-                                    </button>
-                                </div>
-                            )}
+                            {/* Controls below table */}
                             {t.status === 'idle' ? (
                                 <button onClick={() => onActivate(t.tableNumber)}
                                     className="w-full bg-orange-500 hover:bg-orange-400 text-white font-bold py-2.5 rounded-xl text-sm transition">
@@ -330,14 +283,18 @@ function TablesView({ tables, shopId, onActivate, onStatusChange, onShowPin }) {
 }
 
 // ─── Chair step colour helper ─────────────────────────────
-// step 0 = empty/grey, 1 = accepted/blue, 2 = ordered/orange, 3 = received/yellow, 4 = paid/green
+// step 0 = empty/grey
+// step 1 = accepted / seated (blue)
+// step 2 = ordered / item received by kitchen (orange)
+// step 3 = preparing / ready / served — food journey (yellow)
+// step 4 = payment done (green)
 function getStepStyle(step) {
     const styles = {
-        0: { bg: 'bg-slate-700',            border: 'border-slate-500',   text: 'text-slate-400'  },
-        1: { bg: 'bg-blue-900',             border: 'border-blue-500',    text: 'text-blue-400'   },
-        2: { bg: 'bg-orange-950',           border: 'border-orange-500',  text: 'text-orange-400' },
-        3: { bg: 'bg-yellow-950',           border: 'border-yellow-500',  text: 'text-yellow-400' },
-        4: { bg: 'bg-green-950',            border: 'border-green-500',   text: 'text-green-400'  },
+        0: { bg: 'bg-slate-700',  border: 'border-slate-500',  text: 'text-slate-400'  },
+        1: { bg: 'bg-blue-900',   border: 'border-blue-500',   text: 'text-blue-400'   },
+        2: { bg: 'bg-orange-950', border: 'border-orange-500', text: 'text-orange-400' },
+        3: { bg: 'bg-yellow-950', border: 'border-yellow-500', text: 'text-yellow-400' },
+        4: { bg: 'bg-green-950',  border: 'border-green-500',  text: 'text-green-400'  },
     };
     return styles[step] || styles[0];
 }
@@ -346,23 +303,45 @@ function getStepStyle(step) {
 function Chair({ seatIndex, member, table, isCircle }) {
     const [hover, setHover] = useState(false);
 
-    // Derive progress step from member + table state
+    // ── PER-USER step: only look at items ordered by this specific member ──
     let step = 0;
     if (member) {
-        step = 1; // accepted (seated)
-        if (table.hasOrders)  step = 2; // ordered
-        if (table.isPreparing) step = 3; // receiving/preparing
-        if (table.isPaid)      step = 4; // paid
+        step = 1; // seated / accepted
+
+        if (!member.username?.startsWith('Guest')) {
+            // Get ALL items across ALL active orders for this table that belong to this member
+            const memberItems = (table.tableOrders || [])
+                .flatMap(o => (o.items || []))
+                .filter(i => i.username === member.username && i.status !== 'cancelled');
+
+            if (memberItems.length > 0) {
+                step = 2; // has ordered (received by kitchen)
+
+                const anyInProgress = memberItems.some(
+                    i => i.status === 'preparing' || i.status === 'ready' || i.status === 'served'
+                );
+                if (anyInProgress) step = 3; // kitchen working on it
+
+                // Paid = every order that contains this user's items is paid
+                const userOrders = (table.tableOrders || []).filter(
+                    o => (o.items || []).some(i => i.username === member.username)
+                );
+                const allPaid = userOrders.length > 0 && userOrders.every(
+                    o => o.paymentStatus === 'paid'
+                );
+                if (allPaid) step = 4;
+            }
+        }
     }
 
     const s = getStepStyle(step);
     const shape = isCircle ? 'rounded-full' : 'rounded-xl';
 
     const checks = [
-        { label: 'Accepted', done: step >= 1 },
-        { label: 'Ordered',  done: step >= 2 },
-        { label: 'Received', done: step >= 3 },
-        { label: 'Payment',  done: step >= 4 },
+        { label: 'Accepted',  done: step >= 1 },
+        { label: 'Ordered',   done: step >= 2 },
+        { label: 'Received',  done: step >= 3 },
+        { label: 'Payment',   done: step >= 4 },
     ];
 
     return (
@@ -378,12 +357,22 @@ function Chair({ seatIndex, member, table, isCircle }) {
 
             {/* Hover popup */}
             {hover && (
-                <div className="absolute bottom-[115%] left-1/2 -translate-x-1/2 z-50 w-32 bg-white text-slate-900 rounded-xl p-3 shadow-2xl text-xs pointer-events-none">
+                <div className="absolute bottom-[115%] left-1/2 -translate-x-1/2 z-50 w-36 bg-white text-slate-900 rounded-xl p-3 shadow-2xl text-xs pointer-events-none">
                     <p className="font-black text-center border-b border-slate-200 pb-1.5 mb-2 text-slate-600">
                         Seat {seatIndex + 1}
                     </p>
-                    {member && (
-                        <p className="font-bold text-center text-orange-600 mb-2 truncate">{member.username}</p>
+                    {member ? (
+                        <>
+                            <p className="font-bold text-center text-orange-600 mb-1 truncate">{member.username}</p>
+                            {member.guestCode && (
+                                <p className="text-center text-slate-500 text-[10px] font-mono font-bold tracking-widest mb-1">#{member.guestCode}</p>
+                            )}
+                            {member.people && (
+                                <p className="text-center text-slate-500 text-[10px] mb-2">👥 {member.people} people</p>
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-slate-400 text-center mb-2">Empty</p>
                     )}
                     {checks.map(c => (
                         <div key={c.label} className="flex items-center gap-1.5 mb-1">
@@ -842,6 +831,205 @@ function SettingsView({ shop }) {
                         </div>
                     ))}
                 </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── Offers Tab ───────────────────────────────────────────
+function OffersView({ shopId }) {
+    const [offers, setOffers] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showForm, setShowForm] = useState(false);
+    const [editOffer, setEditOffer] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const emptyForm = { title: '', description: '', image: '', specialPrice: '', originalPrice: '', discountPercent: '', status: 'active', expiryDate: '' };
+    const [form, setForm] = useState(emptyForm);
+
+    const fetchOffers = async () => {
+        try {
+            const { data } = await getAllOffers(shopId);
+            setOffers(data);
+        } catch { /* silent */ }
+        finally { setLoading(false); }
+    };
+
+    useEffect(() => { fetchOffers(); }, [shopId]);
+
+    const openAdd = () => { setForm(emptyForm); setEditOffer(null); setShowForm(true); };
+    const openEdit = (offer) => {
+        setForm({
+            title: offer.title, description: offer.description || '', image: offer.image || '',
+            specialPrice: offer.specialPrice, originalPrice: offer.originalPrice || '',
+            discountPercent: offer.discountPercent || '', status: offer.status,
+            expiryDate: offer.expiryDate ? offer.expiryDate.split('T')[0] : '',
+        });
+        setEditOffer(offer);
+        setShowForm(true);
+    };
+
+    const handleSave = async () => {
+        if (!form.title || !form.specialPrice) return toast.error('Title and Special Price are required');
+        setSaving(true);
+        try {
+            const payload = {
+                ...form,
+                specialPrice: Number(form.specialPrice),
+                originalPrice: form.originalPrice ? Number(form.originalPrice) : 0,
+                discountPercent: form.discountPercent ? Number(form.discountPercent) : 0,
+                expiryDate: form.expiryDate || null,
+            };
+            if (editOffer) {
+                await updateOffer(shopId, editOffer._id, payload);
+                toast.success('Offer updated!');
+            } else {
+                await addOffer(shopId, payload);
+                toast.success('Offer added!');
+            }
+            setShowForm(false);
+            fetchOffers();
+        } catch { toast.error('Failed to save offer'); }
+        finally { setSaving(false); }
+    };
+
+    const handleDelete = async (offerId) => {
+        if (!confirm('Delete this offer?')) return;
+        try { await deleteOffer(shopId, offerId); toast.success('Deleted'); fetchOffers(); }
+        catch { toast.error('Delete failed'); }
+    };
+
+    const handleToggleStatus = async (offer) => {
+        try {
+            await updateOffer(shopId, offer._id, { ...offer, status: offer.status === 'active' ? 'inactive' : 'active' });
+            fetchOffers();
+        } catch { toast.error('Failed to update'); }
+    };
+
+    return (
+        <div>
+            <div className="flex justify-between items-center mb-5">
+                <h2 className="text-lg font-extrabold text-white">Special Offers ({offers.length})</h2>
+                <button onClick={openAdd}
+                    className="flex items-center gap-2 bg-orange-500 hover:bg-orange-400 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition">
+                    <Plus className="w-4 h-4" /> Add Offer
+                </button>
+            </div>
+
+            {showForm && (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-5 space-y-3">
+                    <h3 className="font-bold text-white mb-2">{editOffer ? 'Edit Offer' : 'New Offer'}</h3>
+                    <input required value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+                        placeholder="Offer title (e.g. 50% OFF Chicken Biryani Combo)"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                    <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+                        placeholder="Short description (optional)"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                    <input value={form.image} onChange={e => setForm({ ...form, image: e.target.value })}
+                        placeholder="Background image URL (optional)"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                    <div className="grid grid-cols-3 gap-3">
+                        <div>
+                            <label className="text-xs text-slate-400 mb-1 block">Special Price (₹)*</label>
+                            <input required type="number" value={form.specialPrice} onChange={e => setForm({ ...form, specialPrice: e.target.value })}
+                                placeholder="99"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="text-xs text-slate-400 mb-1 block">Original Price (₹)</label>
+                            <input type="number" value={form.originalPrice} onChange={e => setForm({ ...form, originalPrice: e.target.value })}
+                                placeholder="199"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="text-xs text-slate-400 mb-1 block">Discount %</label>
+                            <input type="number" value={form.discountPercent} onChange={e => setForm({ ...form, discountPercent: e.target.value })}
+                                placeholder="Auto"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 outline-none focus:border-orange-500" />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="text-xs text-slate-400 mb-1 block">Expiry Date (optional)</label>
+                            <input type="date" value={form.expiryDate} onChange={e => setForm({ ...form, expiryDate: e.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white outline-none focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="text-xs text-slate-400 mb-1 block">Status</label>
+                            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white outline-none focus:border-orange-500">
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="flex gap-3">
+                        <button onClick={handleSave} disabled={saving}
+                            className="flex-1 bg-orange-500 hover:bg-orange-400 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-60">
+                            {saving ? 'Saving...' : (editOffer ? 'Update Offer' : 'Save Offer')}
+                        </button>
+                        <button onClick={() => setShowForm(false)}
+                            className="px-4 py-2.5 rounded-xl font-bold text-slate-400 hover:text-white bg-slate-800 text-sm">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {loading && <p className="text-slate-500 text-center py-10">Loading offers...</p>}
+            {!loading && offers.length === 0 && (
+                <div className="text-center py-20">
+                    <Tag className="w-14 h-14 text-slate-700 mx-auto mb-3" />
+                    <p className="text-slate-500 font-medium text-lg">No offers yet</p>
+                    <p className="text-slate-600 text-sm mt-1">Add a special offer and it will appear live in customer menu.</p>
+                </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {offers.map(offer => {
+                    const discount = offer.discountPercent || (offer.originalPrice
+                        ? Math.round(((offer.originalPrice - offer.specialPrice) / offer.originalPrice) * 100) : 0);
+                    return (
+                        <div key={offer._id} className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+                            {offer.image && (
+                                <div className="relative h-32 overflow-hidden">
+                                    <img src={offer.image} alt={offer.title} className="w-full h-full object-cover opacity-60" />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent" />
+                                </div>
+                            )}
+                            <div className="p-4">
+                                <div className="flex items-start justify-between gap-2 mb-2">
+                                    <h3 className="font-extrabold text-white leading-tight">{offer.title}</h3>
+                                    {discount > 0 && (
+                                        <span className="shrink-0 bg-red-500 text-white text-xs font-black px-2 py-1 rounded-lg">{discount}% OFF</span>
+                                    )}
+                                </div>
+                                {offer.description && <p className="text-xs text-slate-400 mb-2">{offer.description}</p>}
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className="text-orange-400 font-extrabold text-lg">₹{offer.specialPrice}</span>
+                                    {offer.originalPrice > 0 && (
+                                        <span className="text-slate-500 line-through text-sm">₹{offer.originalPrice}</span>
+                                    )}
+                                </div>
+                                {offer.expiryDate && (
+                                    <p className="text-[10px] text-slate-500 mb-3">Expires: {new Date(offer.expiryDate).toLocaleDateString()}</p>
+                                )}
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => handleToggleStatus(offer)}
+                                        className={`flex-1 py-2 rounded-xl text-xs font-bold border-2 transition ${offer.status === 'active' ? 'border-green-500/40 text-green-400 bg-green-500/10' : 'border-slate-700 text-slate-500'}`}>
+                                        {offer.status === 'active' ? '✅ Active' : '⭕ Inactive'}
+                                    </button>
+                                    <button onClick={() => openEdit(offer)}
+                                        className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl transition">
+                                        <Edit2 className="w-4 h-4 text-slate-400" />
+                                    </button>
+                                    <button onClick={() => handleDelete(offer._id)}
+                                        className="p-2 bg-slate-800 hover:bg-red-500/20 rounded-xl transition">
+                                        <Trash2 className="w-4 h-4 text-slate-600 hover:text-red-400" />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
         </div>
     );

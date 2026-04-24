@@ -44,9 +44,14 @@ export default function KitchenDashboard() {
         if (!next) return;
         try {
             await updateItemStatus(orderId, itemId, next);
+            const order = orders.find(o => o._id === orderId);
+            const item = order?.items?.find(i => i._id === itemId);
             getSocket().emit('order_status_update', {
-                shopId, tableNumber: orders.find(o => o._id === orderId)?.tableNumber,
-                orderId, status: next,
+                shopId,
+                tableNumber: order?.tableNumber,
+                orderId,
+                status: next,
+                username: item?.username || null, // pass username for per-user filtering
             });
             fetchOrders();
             toast.success(`Marked as ${next}!`);
@@ -58,7 +63,7 @@ export default function KitchenDashboard() {
         (order.items || []).map(item => ({
             ...item, orderId: order._id, tableNumber: order.tableNumber,
         }))
-    ).filter(item => item.status !== 'served');
+    ).filter(item => !['served', 'cancelled', 'pending_waiter'].includes(item.status));
 
     const filtered = filter === 'all' ? allItems : allItems.filter(i => i.status === filter);
 
